@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Soundport</title>
+  <style>
+    :root {
+      --bg: #f6f5f2;
+      --fg: #1d1d1f;
+      --muted: #8a8a8e;
+      --accent: #e5484d;
+      --bar-idle: #d4d2cd;
+      --bar-live: #1d1d1f;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #111113;
+        --fg: #f2f2f2;
+        --muted: #8e8e93;
+        --accent: #ff5a5f;
+        --bar-idle: #2c2c30;
+        --bar-live: #f2f2f2;
+      }
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+
+    body {
+      background: var(--bg);
+      color: var(--fg);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 28px;
+      padding: 24px 16px calc(24px + env(safe-area-inset-bottom));
+      -webkit-user-select: none;
+      user-select: none;
+    }
+
+    #timer {
+      font-size: 44px;
+      font-weight: 300;
+      letter-spacing: 1px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    #wave {
+      display: block;
+      width: min(92vw, 420px);
+      height: 96px;
+    }
+
+    .rec-wrap {
+      position: relative;
+      width: 140px;
+      height: 140px;
+      display: grid;
+      place-items: center;
+    }
+
+    /* The halo grows with the voice level. At silence it sits hidden behind the button. */
+    #halo {
+      position: absolute;
+      inset: 0;
+      border-radius: 50%;
+      background: var(--accent);
+      opacity: 0;
+      transform: scale(0.7);
+      transition: opacity 0.25s;
+      will-change: transform;
+    }
+    .recording #halo { opacity: 0.2; }
+
+    #rec {
+      position: relative;
+      width: 96px;
+      height: 96px;
+      padding: 0;
+      border-radius: 50%;
+      border: 4px solid var(--fg);
+      background: var(--bg);
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+    #rec:disabled { opacity: 0.4; }
+
+    /* Red circle when idle, morphs into a rounded "stop" square while recording */
+    #rec .dot {
+      width: 72px;
+      height: 72px;
+      border-radius: 50%;
+      background: var(--accent);
+      transition: width 0.2s ease, height 0.2s ease, border-radius 0.2s ease;
+    }
+    .recording #rec .dot {
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+    }
+
+    #status {
+      min-height: 1.4em;
+      color: var(--muted);
+      font-size: 15px;
+      text-align: center;
+    }
+
+    /* What the server says about the live stream */
+    #live {
+      min-height: 1.2em;
+      margin-top: -18px;
+      color: var(--muted);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+      text-align: center;
+      opacity: 0.8;
+    }
+  </style>
+</head>
+<body>
+  <div id="timer">0:00</div>
+  <canvas id="wave" aria-hidden="true"></canvas>
+  <div class="rec-wrap">
+    <div id="halo"></div>
+    <button id="rec" aria-label="Start recording"><span class="dot"></span></button>
+  </div>
+  <div id="status">Tap to record</div>
+  <div id="live"></div>
+
+<script>
+  const recBtn = document.getElementById("rec");
+  const halo = document.getElementById("halo");
+  const statusEl = document.getElementById("status");
+  const timerEl = document.getElementById("timer");
+  const liveEl = document.getElementById("live");
+  const canvas = document.getElementById("wave");
+  const g = canvas.getContext("2d");
+
+  const BAR_COUNT = 48;      // how many bars of history the waveform shows
+  const BAR_EVERY_MS = 60;   // a new bar is added this often
+  const HEARD_LEVEL = 0.15;  // above this counts as "hearing something"
+
+  const levels = new Array(BAR_COUNT).fill(0);
+
+  let recording = false;
+  let stream, recorder, chunks = [];
+  let audioCtx, analyser, samples, rafId;
+  let ws; // live audio stream to the server
+  let startedAt = 0, lastBarAt = 0, lastHeardAt = 0, smooth = 0;
+
+  // ---- drawing -------------------------------------------------------------
+
+  function cssVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  function sizeCanvas() {
+    // Draw at the screen's real pixel density so bars stay crisp on the iPhone
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = Math.round(rect.width * dpr);
+    canvas.height = Math.round(rect.height * dpr);
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    draw();
+  }
+
+  function draw() {
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    const gap = 3;
+    const barW = (w - gap * (BAR_COUNT - 1)) / BAR_COUNT;
+
+    g.clearRect(0, 0, w, h);
+    g.fillStyle = cssVar(recording ? "--bar-live" : "--bar-idle");
+
+    levels.forEach((level, i) => {
+      const barH = Math.max(3, level * h);
+      const x = i * (barW + gap);
+      const y = (h - barH) / 2;
+      g.beginPath();
+      if (g.roundRect) g.roundRect(x, y, barW, barH, Math.min(barW / 2, 2));
+      else g.rect(x, y, barW, barH);
+      g.fill();
+    });
+  }
+
+  // ---- reading the microphone level -----------------------------------------
+
+  // Returns 0..1: how loud the mic is right now
+  function readLevel() {
+    analyser.getByteTimeDomainData(samples); // the latest slice of raw sound, values 0..255, silence = 128
+    let sum = 0;
+    for (let i = 0; i < samples.length; i++) {
+      const v = (samples[i] - 128) / 128;    // turn into -1..1
+      sum += v * v;
+    }
+    const rms = Math.sqrt(sum / samples.length);  // average loudness of that slice
+    const db = 20 * Math.log10(rms + 1e-8);      // ears hear loudness logarithmically
+    return Math.min(1, Math.max(0, (db + 60) / 50)); // -60 dB (quiet room) → 0, -10 dB (loud) → 1
+  }
+
+  function loop(now) {
+    const level = readLevel();
+    // Jump up instantly, fall back gently, so the animation feels alive instead of jittery
+    smooth = level > smooth ? level : smooth * 0.9 + level * 0.1;
+
+    halo.style.transform = `scale(${0.7 + smooth * 0.5})`;
+
+    if (now - lastBarAt > BAR_EVERY_MS) {
+      levels.push(smooth);
+      levels.shift();
+      lastBarAt = now;
+    }
+
+    if (smooth > HEARD_LEVEL) lastHeardAt = Date.now();
+    const silentFor = Date.now() - lastHeardAt;
+    const elapsed = Date.now() - startedAt;
+    statusEl.textContent =
+      elapsed > 2000 && silentFor > 2000 ? "Not hearing anything… check the mic" : "Listening…";
+
+    timerEl.textContent = formatTime(elapsed / 1000);
+    draw();
+    rafId = requestAnimationFrame(loop);
+  }
+
+  function formatTime(seconds) {
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m}:${String(s).padStart(2, "0")}`;
+  }
+
+  // ---- recording -------------------------------------------------------------
+
+  recBtn.onclick = () => (recording ? stop() : start());
+
+  async function start() {
+    // iOS only allows audio processing to start directly inside a tap, so create this first
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e) {
+      audioCtx.close();
+      statusEl.textContent = "Microphone blocked: " + e.message;
+      return;
+    }
+    await audioCtx.resume();
+
+    // Tap the mic signal into an analyser. It only measures; nothing is played back.
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 1024;
+    samples = new Uint8Array(analyser.fftSize);
+    const source = audioCtx.createMediaStreamSource(stream);
+    source.connect(analyser);
+
+    liveEl.textContent = "";
+    try {
+      await startLiveStream(source);
+    } catch (e) {
+      // The normal record-and-upload path keeps working even if streaming fails
+      liveEl.textContent = "live stream unavailable: " + e.message;
+    }
+
+    chunks = [];
+    recorder = new MediaRecorder(stream);
+    recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+    recorder.onstop = upload;
+    recorder.start();
+
+    recording = true;
+    document.body.classList.add("recording");
+    recBtn.setAttribute("aria-label", "Stop recording");
+    startedAt = lastHeardAt = Date.now();
+    levels.fill(0);
+    rafId = requestAnimationFrame(loop);
+  }
+
+  // Sends raw 16 kHz samples to the server while recording, ~10 small messages per second
+  async function startLiveStream(source) {
+    // The worklet runs in the browser's audio thread; it lives in its own file
+    await audioCtx.audioWorklet.addModule("/pcm-worklet.js");
+    const capture = new AudioWorkletNode(audioCtx, "pcm-capture");
+
+    // Audio only flows through nodes that lead to the speakers, so route the worklet
+    // into a volume knob set to zero: it keeps running, and nothing is heard.
+    const mute = audioCtx.createGain();
+    mute.gain.value = 0;
+    source.connect(capture).connect(mute).connect(audioCtx.destination);
+
+    ws = new WebSocket(`wss://${location.host}/ws/audio`);
+    ws.binaryType = "arraybuffer";
+    ws.onmessage = e => { liveEl.textContent = e.data; };
+    ws.onerror = () => { liveEl.textContent = "live stream error"; };
+
+    // Each message from the worklet is 0.1 s of audio, ready to send as-is.
+    // Anything captured before the socket finishes opening is simply skipped.
+    capture.port.onmessage = e => {
+      if (ws.readyState === WebSocket.OPEN) ws.send(e.data);
+    };
+  }
+
+  function stop() {
+    recording = false;
+    recorder.stop(); // triggers upload() once the recorder has finished the file
+    cancelAnimationFrame(rafId);
+    if (ws) ws.close(); // tells the server the live stream is finished
+    audioCtx.close();
+
+    document.body.classList.remove("recording");
+    recBtn.setAttribute("aria-label", "Start recording");
+    halo.style.transform = "";
+    levels.fill(0);
+    draw();
+  }
+
+  async function upload() {
+    stream.getTracks().forEach(t => t.stop()); // turns off the mic (and the orange dot on iPhone)
+
+    const audio = new Blob(chunks, { type: recorder.mimeType });
+    recBtn.disabled = true;
+    statusEl.textContent = "Sending…";
+
+    try {
+      const res = await fetch("/upload", {
+        method: "POST",
+        headers: { "Content-Type": audio.type || "application/octet-stream" },
+        body: audio
+      });
+      statusEl.textContent = res.ok ? "Sent ✓  Tap to record again" : `Upload failed (${res.status})`;
+    } catch (e) {
+      statusEl.textContent = "Upload failed: " + e.message;
+    } finally {
+      recBtn.disabled = false;
+    }
+  }
+
+  window.addEventListener("resize", sizeCanvas);
+  sizeCanvas();
+</script>
+</body>
+</html>
