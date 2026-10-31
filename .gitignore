@@ -20,6 +20,7 @@ handoffnotes.txt
 test.wav
 recordings/**
 dev-keystore.p12
+whisper-server.log
 
 ### Eclipse ###
 .apt_generated

@@ -1,8 +1,6 @@
-package com.ntros.watcher;
+package com.ntros.transcription;
 
 import com.ntros.LifeCycle;
-import com.ntros.transcription.AudioToTextTranscriber;
-import com.ntros.transcription.Transcriber;
 import java.awt.Toolkit;
 import java.awt.datatransfer.StringSelection;
 import java.nio.file.Path;
@@ -11,8 +9,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class FileDispatcher implements Runnable, LifeCycle {
-  private static final Logger log = LoggerFactory.getLogger(FileDispatcher.class);
+public class TranscriptionWorker implements Runnable, LifeCycle {
+  private static final Logger log = LoggerFactory.getLogger(TranscriptionWorker.class);
 
   private final BlockingQueue<Path> fileQueue;
   private final Thread dispatchThread;
@@ -20,7 +18,7 @@ public class FileDispatcher implements Runnable, LifeCycle {
   private final Transcriber att;
   private final Transcriber transcriber;
 
-  public FileDispatcher(BlockingQueue<Path> fileQueue, Transcriber transcriber) {
+  public TranscriptionWorker(BlockingQueue<Path> fileQueue, Transcriber transcriber) {
     this.fileQueue = fileQueue;
     // TODO: move these strings to settings or a config file
     att =

@@ -3,19 +3,18 @@ package com.ntros;
 import com.ntros.data.FileStorageSettings;
 import com.ntros.data.ServerSettings;
 import com.ntros.fileprocessor.AudioFileProcessor;
-import com.ntros.fileprocessor.FileDispatchingFunction;
 import com.ntros.fileprocessor.FileProcessor;
 import com.ntros.server.JavalinWebServer;
 import com.ntros.transcription.WhisperServerProcess;
 import com.ntros.transcription.WhisperServerTranscriber;
-import com.ntros.watcher.FileWatcher;
+import com.ntros.transcription.TranscriptionWorker;
 import java.nio.file.Path;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 
 public class RuntimeController implements LifeCycle {
 
-  private final FileWatcher watcher;
+  private final TranscriptionWorker transcriptionWorker;
   private final WhisperServerProcess process;
   private final JavalinWebServer javalinWebServer;
 
@@ -37,7 +36,7 @@ public class RuntimeController implements LifeCycle {
             Path.of("whisper-server.log"));
 
     var transcriber = new WhisperServerTranscriber(process.inferenceUri());
-    watcher = new FileWatcher(fileQueue, transcriber);
+    transcriptionWorker = new TranscriptionWorker(fileQueue, transcriber);
 
     javalinWebServer =
         new JavalinWebServer(
@@ -54,24 +53,23 @@ public class RuntimeController implements LifeCycle {
             });
   }
 
-  /**
-   * process runs the model. It needs to start first. Then the middleware. Last is the server
-   */
+  /** process runs the model. It needs to start first. Then the middleware. Last is the server */
   @Override
   public void start() {
     process.start();
-    watcher.start();
+    transcriptionWorker.start();
     javalinWebServer.start();
   }
 
   /**
    * shutdown in reverse order
+   *
    * @throws InterruptedException
    */
   @Override
   public void stop() throws InterruptedException {
     javalinWebServer.stop();
-    watcher.stop();
+    transcriptionWorker.stop();
     process.stop();
   }
 }
