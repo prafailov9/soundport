@@ -2,6 +2,8 @@ package com.ntros;
 
 import com.ntros.data.FileStorageSettings;
 import com.ntros.data.ServerSettings;
+import com.sun.jna.Native;
+import com.sun.jna.platform.win32.User32;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -31,20 +33,21 @@ public class Main {
     var fileSettings =
         new FileStorageSettings(BASE_DIR, TMP_DIR, READY_DIR, LIVE_DIR, DATE_TIME_FORMATTER);
     log.info("Starting server on port: {}", WEB_SERVER_PORT);
-    RuntimeController runtimeController = new RuntimeController(settings, fileSettings);
+    RuntimeController controller = new RuntimeController(settings, fileSettings);
 
-    attachShutdownHook(runtimeController);
-    runtimeController.start();
-    log.info("Server running");
+    attachShutdownHook(controller);
+    controller.start();
+    log.info("Accepting requests...");
+
   }
 
-  private static void attachShutdownHook(RuntimeController runtimeController) {
+  private static void attachShutdownHook(RuntimeController controller) {
     Runtime.getRuntime()
         .addShutdownHook(
             new Thread(
                 () -> {
                   try {
-                    runtimeController.stop();
+                    controller.stop();
                     //                    cleanup();
                   } catch (InterruptedException e) {
                     log.info("Error during server shutdown", e);

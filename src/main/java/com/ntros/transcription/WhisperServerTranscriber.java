@@ -42,8 +42,10 @@ public class WhisperServerTranscriber extends AbstractTranscriber {
       throw new IOException(
           "whisper-server returned " + response.statusCode() + ": " + response.body());
     }
-    //    return response.body().strip();
-    return response.body().strip().replaceAll("\\s*\\n\\s*", " ");
+    // splits lines as a text block
+    return response.body().strip();
+    // whole response is oneline
+    //    return response.body().strip().replaceAll("\\s*\\n\\s*", " ");
   }
 
   private HttpRequest buildWhisperRequest(Path wav) throws FileNotFoundException {

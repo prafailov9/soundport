@@ -13,12 +13,14 @@ public class TranscriptionWorker implements Runnable, LifeCycle {
   private static final Logger log = LoggerFactory.getLogger(TranscriptionWorker.class);
 
   private final BlockingQueue<Path> fileQueue;
+  private final BlockingQueue<String> textQueue;
   private final Thread dispatchThread;
   private final AtomicBoolean running = new AtomicBoolean(true);
   private final Transcriber att;
   private final Transcriber transcriber;
 
-  public TranscriptionWorker(BlockingQueue<Path> fileQueue, Transcriber transcriber) {
+  public TranscriptionWorker(
+      BlockingQueue<Path> fileQueue, BlockingQueue<String> textQueue, Transcriber transcriber) {
     this.fileQueue = fileQueue;
     // TODO: move these strings to settings or a config file
     att =
@@ -28,6 +30,7 @@ public class TranscriptionWorker implements Runnable, LifeCycle {
             Path.of("C:\\tools\\whisper-bin-x64\\models\\ggml-large-v3-turbo-q5_0.bin"));
 
     this.transcriber = transcriber;
+    this.textQueue = textQueue;
     dispatchThread = new Thread(this, "dispatch-1");
   }
 
@@ -35,13 +38,15 @@ public class TranscriptionWorker implements Runnable, LifeCycle {
   public void run() {
     while (running.get()) {
       try {
-        Path f = fileQueue.take(); // sleeps until a file arrives
+        Path f = fileQueue.take();
         // TODO: Add fallback to att
+
+        // TODO: maybe submit to Virtual Threads
         String plaintext = transcriber.transcribe(f);
         log.info("Transcribed:\n{}", plaintext);
-
-        // automated Ctrl+C
-        copyToClipboard(plaintext);
+        if (!textQueue.offer(plaintext)) {
+          log.warn("Count not submit transcribed text to ScreenWriter");
+        }
       } catch (InterruptedException e) {
         break;
       } catch (RuntimeException e) {
@@ -60,11 +65,5 @@ public class TranscriptionWorker implements Runnable, LifeCycle {
     running.set(false);
     dispatchThread.interrupt(); // wakes take() so the loop can exit
     dispatchThread.join();
-  }
-
-  private void copyToClipboard(String plaintext) {
-    Toolkit.getDefaultToolkit()
-        .getSystemClipboard()
-        .setContents(new StringSelection(plaintext), null);
   }
 }

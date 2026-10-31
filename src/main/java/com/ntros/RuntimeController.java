@@ -5,6 +5,7 @@ import com.ntros.data.ServerSettings;
 import com.ntros.fileprocessor.AudioFileProcessor;
 import com.ntros.fileprocessor.FileProcessor;
 import com.ntros.server.JavalinWebServer;
+import com.ntros.transcription.WinScreenWriter;
 import com.ntros.transcription.WhisperServerProcess;
 import com.ntros.transcription.WhisperServerTranscriber;
 import com.ntros.transcription.TranscriptionWorker;
@@ -16,6 +17,7 @@ public class RuntimeController implements LifeCycle {
 
   private final TranscriptionWorker transcriptionWorker;
   private final WhisperServerProcess process;
+  private final WinScreenWriter winScreenWriter;
   private final JavalinWebServer javalinWebServer;
 
   public RuntimeController(ServerSettings serverSettings, FileStorageSettings fileStorageSettings) {
@@ -27,7 +29,12 @@ public class RuntimeController implements LifeCycle {
     }
 
     FileProcessor fileProcessor = new AudioFileProcessor(fileStorageSettings);
+    // audio2text queue
     BlockingQueue<Path> fileQueue = new LinkedBlockingQueue<>();
+    // text2screen queue
+    BlockingQueue<String> textQueue = new LinkedBlockingQueue<>();
+    winScreenWriter = new WinScreenWriter(textQueue);
+
     process =
         new WhisperServerProcess(
             Path.of("C:\\tools\\whisper-cuda\\Release\\whisper-server.exe"),
@@ -36,7 +43,7 @@ public class RuntimeController implements LifeCycle {
             Path.of("whisper-server.log"));
 
     var transcriber = new WhisperServerTranscriber(process.inferenceUri());
-    transcriptionWorker = new TranscriptionWorker(fileQueue, transcriber);
+    transcriptionWorker = new TranscriptionWorker(fileQueue, textQueue, transcriber);
 
     javalinWebServer =
         new JavalinWebServer(
@@ -59,6 +66,7 @@ public class RuntimeController implements LifeCycle {
     process.start();
     transcriptionWorker.start();
     javalinWebServer.start();
+    winScreenWriter.start();
   }
 
   /**
@@ -68,6 +76,7 @@ public class RuntimeController implements LifeCycle {
    */
   @Override
   public void stop() throws InterruptedException {
+    winScreenWriter.stop();
     javalinWebServer.stop();
     transcriptionWorker.stop();
     process.stop();

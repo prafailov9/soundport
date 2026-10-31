@@ -4,8 +4,13 @@ key generated with the following command:
 [keytool -genkeypair -alias dev -keyalg RSA -keysize 2048 -validity 365 -keystore dev-keystore.p12 -storetype PKCS12 -storepass changeit -dname "CN=dev" -ext "SAN=ip:<my-ip>,dns:localhost"]
 check ip with ipconfig and sub the SAN part
 
+! add --enable-native-access=ALL-UNNAMED to the IntelliJ's Run configuration's VM options.
+
 Tasks:
 - [DONE] as soon as the file is ready, another thread reads it.
 - [DONE] make sure the file is written to in a temp_dir first, then moved to the main scanned dir
-- add transcribe
-- add "done" folder to storageSettings
+- [DONE] add transcribe
+- add poison pills to the queue-ingesting threads
+- [DONE] getting ScreenWriter to read open windows with JNA library - via both jna dependencies, WinScreenWiter now lists all open windows
+- [DONE] filter windows by relevant ones, if any, find the focused one, if none focused -> continue
+
