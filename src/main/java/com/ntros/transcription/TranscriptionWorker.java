@@ -11,16 +11,16 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class FileWatcher implements Runnable, LifeCycle {
-  private static final Logger log = LoggerFactory.getLogger(FileWatcher.class);
+public class FileDispatcher implements Runnable, LifeCycle {
+  private static final Logger log = LoggerFactory.getLogger(FileDispatcher.class);
 
   private final BlockingQueue<Path> fileQueue;
-  private final Thread watcherThread;
+  private final Thread dispatchThread;
   private final AtomicBoolean running = new AtomicBoolean(true);
   private final Transcriber att;
   private final Transcriber transcriber;
 
-  public FileWatcher(BlockingQueue<Path> fileQueue, Transcriber transcriber) {
+  public FileDispatcher(BlockingQueue<Path> fileQueue, Transcriber transcriber) {
     this.fileQueue = fileQueue;
     // TODO: move these strings to settings or a config file
     att =
@@ -30,7 +30,7 @@ public class FileWatcher implements Runnable, LifeCycle {
             Path.of("C:\\tools\\whisper-bin-x64\\models\\ggml-large-v3-turbo-q5_0.bin"));
 
     this.transcriber = transcriber;
-    watcherThread = new Thread(this, "watcher-1");
+    dispatchThread = new Thread(this, "dispatch-1");
   }
 
   @Override
@@ -43,8 +43,7 @@ public class FileWatcher implements Runnable, LifeCycle {
         log.info("Transcribed:\n{}", plaintext);
 
         // automated Ctrl+C
-        Toolkit.getDefaultToolkit().getSystemClipboard()
-            .setContents(new StringSelection(plaintext), null);
+        copyToClipboard(plaintext);
       } catch (InterruptedException e) {
         break;
       } catch (RuntimeException e) {
@@ -55,13 +54,19 @@ public class FileWatcher implements Runnable, LifeCycle {
 
   @Override
   public void start() {
-    watcherThread.start();
+    dispatchThread.start();
   }
 
   @Override
   public void stop() throws InterruptedException {
     running.set(false);
-    watcherThread.interrupt(); // wakes take() so the loop can exit
-    watcherThread.join();
+    dispatchThread.interrupt(); // wakes take() so the loop can exit
+    dispatchThread.join();
+  }
+
+  private void copyToClipboard(String plaintext) {
+    Toolkit.getDefaultToolkit()
+        .getSystemClipboard()
+        .setContents(new StringSelection(plaintext), null);
   }
 }
