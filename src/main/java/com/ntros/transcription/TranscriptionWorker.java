@@ -5,6 +5,7 @@ import com.ntros.data.UploadJob;
 import com.ntros.output.TextOut;
 import java.nio.file.Path;
 import java.util.concurrent.BlockingQueue;
+import java.util.function.Predicate;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,6 +15,8 @@ public class TranscriptionWorker implements Runnable, LifeCycle {
 
   private final BlockingQueue<UploadJob> uploadQueue;
   private final BlockingQueue<TextOut> textQueue;
+  // true if the live stream with this id already typed the text; the upload is then a duplicate
+  private final Predicate<String> coveredByLive;
   private final Thread workerThread;
   private final AtomicBoolean running = new AtomicBoolean(true);
   private final Transcriber att;
@@ -22,7 +25,8 @@ public class TranscriptionWorker implements Runnable, LifeCycle {
   public TranscriptionWorker(
       BlockingQueue<UploadJob> uploadQueue,
       BlockingQueue<TextOut> textQueue,
-      Transcriber transcriber) {
+      Transcriber transcriber,
+      Predicate<String> coveredByLive) {
     this.uploadQueue = uploadQueue;
     // TODO: move these strings to settings or a config file
     att =
@@ -33,6 +37,7 @@ public class TranscriptionWorker implements Runnable, LifeCycle {
 
     this.transcriber = transcriber;
     this.textQueue = textQueue;
+    this.coveredByLive = coveredByLive;
     workerThread = new Thread(this, "upload-1");
   }
 
@@ -41,11 +46,15 @@ public class TranscriptionWorker implements Runnable, LifeCycle {
     while (running.get()) {
       try {
         UploadJob job = uploadQueue.take();
+        if (coveredByLive.test(job.streamId())) {
+          log.info("Live already typed {}, skipping the upload", job.file().getFileName());
+          continue;
+        }
         // TODO: Add fallback to att
 
         // TODO: maybe submit to Virtual Threads
         String plaintext = transcriber.transcribe(job.file());
-        // TODO: add command interpretation. If the plaintext contains a password(e.g. a specific
+        // TODO: add command interpretation later on. If the plaintext contains a password(e.g. a specific
         // sentence), watch for command words after it: cleanup current recordings, write the
         // following text in files, etc.
         log.info("Transcribed:\n{}", plaintext);

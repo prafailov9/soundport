@@ -1,23 +1,17 @@
 package com.ntros.server;
 
 import com.ntros.LifeCycle;
-import com.ntros.data.FileStorageSettings;
 import com.ntros.data.ServerSettings;
 import com.ntros.data.UploadRequest;
-import com.ntros.data.Wav;
 import com.ntros.fileprocessor.FileDispatchingFunction;
+import com.ntros.live.LiveClient;
+import com.ntros.live.LiveTranscriptionService;
 import io.javalin.Javalin;
 import io.javalin.community.ssl.SslPlugin;
 import io.javalin.http.Context;
-import java.io.ByteArrayOutputStream;
+import io.javalin.websocket.WsContext;
 import java.io.InputStream;
-import java.nio.ByteBuffer;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,28 +19,23 @@ public final class JavalinWebServer implements LifeCycle {
 
   private static final Logger log = LoggerFactory.getLogger(JavalinWebServer.class);
 
-  private final Map<String, ByteArrayOutputStream> liveAudio = new ConcurrentHashMap<>();
+  // the page sends a UUID; anything else falls back to the socket's own id
+  private static final Pattern STREAM_ID = Pattern.compile("[A-Za-z0-9-]{1,64}");
 
   private final Javalin app;
   private final FileDispatchingFunction uploadCallback;
-  private final Path liveDir;
-  private final DateTimeFormatter formatter;
+  private final LiveTranscriptionService liveService;
 
   public JavalinWebServer(
       ServerSettings serverSettings,
-      FileStorageSettings fileStorageSettings,
-      FileDispatchingFunction uploadCallback) {
+      FileDispatchingFunction uploadCallback,
+      LiveTranscriptionService liveService) {
     if (serverSettings == null) {
       throw new IllegalArgumentException("server settings empty");
     }
-    if (fileStorageSettings == null) {
-      throw new IllegalArgumentException("file settings empty");
-    }
-
-    liveDir = fileStorageSettings.liveDir();
-    formatter = fileStorageSettings.formatter();
 
     this.uploadCallback = uploadCallback;
+    this.liveService = liveService;
 
     SslPlugin ssl =
         new SslPlugin(
@@ -87,41 +76,23 @@ public final class JavalinWebServer implements LifeCycle {
                     ws.onError(ctx -> log.error("WS error: {}", ctx.sessionId(), ctx.error()));
                   });
 
+              // Live audio: raw 16 kHz PCM in, {"partial"|"final"|"done"} JSON out. Only the
+              // live service sends on this socket, from its one thread
               config.routes.ws(
                   "/ws/audio",
                   ws -> {
-                    ws.onConnect(
+                    ws.onConnect(ctx -> liveService.open(streamId(ctx), new WsClient(ctx)));
+                    ws.onBinaryMessage(ctx -> liveService.audio(new WsClient(ctx), ctx.data()));
+                    ws.onMessage(
                         ctx -> {
-                          liveAudio.put(ctx.sessionId(), new ByteArrayOutputStream());
-                          log.info("Live stream started: {}", ctx.sessionId());
+                          if ("end".equals(ctx.message())) {
+                            liveService.end(new WsClient(ctx));
+                          } else {
+                            log.warn("Unknown live message: {}", ctx.message());
+                          }
                         });
-
-                    ws.onBinaryMessage(
-                        ctx -> {
-                          ByteBuffer buf = ctx.data();
-                          byte[] bytes = new byte[buf.remaining()];
-                          buf.get(bytes);
-
-                          var audio = liveAudio.get(ctx.sessionId());
-                          audio.write(bytes);
-                          ctx.send(
-                              String.format(
-                                  "streamed %.1f s", audio.size() / (double) Wav.BYTES_PER_SECOND));
-                        });
-
-                    ws.onClose(
-                        ctx -> {
-                          var audio = liveAudio.remove(ctx.sessionId());
-                          if (audio == null || audio.size() == 0) return;
-                          Files.createDirectories(liveDir);
-                          Path file =
-                              liveDir.resolve(LocalDateTime.now().format(formatter) + ".wav");
-                          Wav.write(file, audio.toByteArray());
-                          log.info(
-                              "Live stream saved: {} ({} s)",
-                              file,
-                              audio.size() / Wav.BYTES_PER_SECOND);
-                        });
+                    ws.onClose(ctx -> liveService.dropped(new WsClient(ctx)));
+                    ws.onError(ctx -> log.error("Live socket error", ctx.error()));
                   });
             });
   }
@@ -138,6 +109,25 @@ public final class JavalinWebServer implements LifeCycle {
     try (InputStream in = ctx.bodyInputStream()) {
       boolean ok = uploadCallback.writeAndDispatch(new UploadRequest(in, contentType, streamId));
       ctx.status(ok ? 204 : 500);
+    }
+  }
+
+  private static String streamId(WsContext ctx) {
+    String id = ctx.queryParam("id");
+    return id != null && STREAM_ID.matcher(id).matches() ? id : ctx.sessionId();
+  }
+
+  /** One phone connection. WsContext is equal per connection, so this is too. */
+  private record WsClient(WsContext ctx) implements LiveClient {
+
+    @Override
+    public void send(String json) {
+      ctx.send(json);
+    }
+
+    @Override
+    public void close() {
+      ctx.closeSession();
     }
   }
 

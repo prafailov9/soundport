@@ -90,7 +90,7 @@ class LiveTranscriptionServiceTest {
   }
 
   private void stream(byte[]... parts) {
-    service.audio(ID, ByteBuffer.wrap(concat(parts)));
+    service.audio(client, ByteBuffer.wrap(concat(parts)));
   }
 
   private static int bytes(double seconds) {
@@ -101,7 +101,7 @@ class LiveTranscriptionServiceTest {
   void silenceIsNeverSentToWhisper() throws IOException {
     stream(silence(2));
     service.tick();
-    service.end(ID);
+    service.end(client);
 
     assertFalse(service.coveredByLive(ID, WAIT));
     assertTrue(transcriber.calls.isEmpty());
@@ -121,7 +121,7 @@ class LiveTranscriptionServiceTest {
     assertEquals(List.of("{\"final\":\"seg1\"}"), client.messages);
     assertEquals(new TextOut("seg1", "seg1", false), textQueue.poll());
 
-    service.end(ID);
+    service.end(client);
     assertTrue(service.coveredByLive(ID, WAIT));
     assertEquals(1, transcriber.calls.size()); // only silence was left
   }
@@ -134,7 +134,7 @@ class LiveTranscriptionServiceTest {
     assertEquals(List.of("{\"partial\":\"seg1\"}"), client.messages);
     assertTrue(textQueue.isEmpty());
 
-    service.end(ID);
+    service.end(client);
     assertTrue(service.coveredByLive(ID, WAIT));
     assertEquals(
         List.of("{\"partial\":\"seg1\"}", "{\"final\":\"seg2\"}", "{\"partial\":\"\"}", DONE),
@@ -175,7 +175,7 @@ class LiveTranscriptionServiceTest {
   @Test
   void droppedStreamStillTypesButSendsNothing() {
     stream(speech(1));
-    service.dropped(ID);
+    service.dropped(client);
 
     assertTrue(service.coveredByLive(ID, WAIT));
     assertTrue(client.messages.isEmpty());
@@ -186,8 +186,8 @@ class LiveTranscriptionServiceTest {
   @Test
   void endFollowedByCloseFinishesOnce() {
     stream(speech(1));
-    service.end(ID);
-    service.dropped(ID);
+    service.end(client);
+    service.dropped(client);
 
     assertTrue(service.coveredByLive(ID, WAIT));
     assertEquals(1, transcriber.calls.size());
@@ -201,12 +201,18 @@ class LiveTranscriptionServiceTest {
   }
 
   @Test
-  void secondStreamWithTheSameIdIsRefused() {
+  void secondStreamWithTheSameIdIsRefusedAndLeavesTheFirstAlone() {
     var second = new FakeClient();
     service.open(ID, second);
+    service.audio(second, ByteBuffer.wrap(speech(2)));
+    service.dropped(second);
 
     assertTrue(second.closed);
     assertFalse(client.closed);
+
+    stream(speech(1));
+    service.tick();
+    assertEquals(List.of(bytes(1)), transcriber.calls); // only the first stream's audio
   }
 
   @Test

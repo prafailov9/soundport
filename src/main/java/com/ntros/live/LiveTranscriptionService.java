@@ -57,7 +57,8 @@ public final class LiveTranscriptionService implements LifeCycle {
   private final BlockingQueue<TextOut> textQueue;
   private final Path liveDir;
   private final DateTimeFormatter formatter;
-  private final Map<String, LiveSession> open = new ConcurrentHashMap<>();
+  // keyed by connection, not stream id: a refused duplicate must not touch the stream it copies
+  private final Map<LiveClient, LiveSession> open = new ConcurrentHashMap<>();
 
   // outlives the session: the upload arrives just after its stream ends
   private final Map<String, CompletableFuture<Boolean>> results = new ConcurrentHashMap<>();
@@ -76,32 +77,34 @@ public final class LiveTranscriptionService implements LifeCycle {
 
   // ---- called from the web server (Jetty threads) ----
 
-  public void open(String streamId, LiveClient client) {
-    var session = new LiveSession(streamId, client);
-    if (open.putIfAbsent(streamId, session) != null) {
+  /** A refused stream (its id is already streaming) is closed; its later calls are ignored. */
+  public synchronized void open(String streamId, LiveClient client) {
+    if (open.values().stream().anyMatch(s -> s.streamId.equals(streamId))) {
       log.warn("Live stream {} is already open, refusing the second one", streamId);
       client.close();
       return;
     }
+    var session = new LiveSession(streamId, client);
+    open.put(client, session);
     results.put(streamId, session.done);
     log.info("Live stream started: {}", streamId);
   }
 
-  public void audio(String streamId, ByteBuffer data) {
-    var session = open.get(streamId);
+  public void audio(LiveClient client, ByteBuffer data) {
+    var session = open.get(client);
     if (session != null) {
       session.append(data);
     }
   }
 
   /** The page said it's done: transcribe the last sentence, send it, then close the socket. */
-  public void end(String streamId) {
-    finishLater(streamId, true);
+  public void end(LiveClient client) {
+    finishLater(client, true);
   }
 
   /** The socket closed. Does nothing if end() already finished this stream. */
-  public void dropped(String streamId) {
-    finishLater(streamId, false);
+  public void dropped(LiveClient client) {
+    finishLater(client, false);
   }
 
   // ---- called from the upload worker ----
@@ -190,15 +193,15 @@ public final class LiveTranscriptionService implements LifeCycle {
     sendPartial(s, tailHasSpeech ? transcriber.transcribe(window).strip() : "");
   }
 
-  private void finishLater(String streamId, boolean clientWaiting) {
-    var session = open.remove(streamId); // whichever of end/dropped comes second finds nothing
+  private void finishLater(LiveClient client, boolean clientWaiting) {
+    var session = open.remove(client); // whichever of end/dropped comes second finds nothing
     if (session == null) {
       return;
     }
     try {
       exec.execute(() -> finish(session, clientWaiting));
     } catch (RejectedExecutionException e) {
-      log.warn("Live stream {} ended during shutdown, not finished", streamId);
+      log.warn("Live stream {} ended during shutdown, not finished", session.streamId);
       session.done.complete(!session.confirmed.isEmpty());
     }
   }

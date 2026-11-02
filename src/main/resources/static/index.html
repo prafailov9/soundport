@@ -111,7 +111,20 @@
       text-align: center;
     }
 
-    /* What the server says about the live stream */
+    /* What live transcription heard so far: confirmed text, then a grey guess still changing */
+    #transcript {
+      width: min(92vw, 420px);
+      max-height: 30vh;
+      overflow-y: auto;
+      font-size: 17px;
+      line-height: 1.45;
+      -webkit-user-select: text;
+      user-select: text;
+    }
+    #transcript:not(.has-text) { display: none; }
+    #transcript .partial { color: var(--muted); }
+
+    /* Problems with the live stream */
     #live {
       min-height: 1.2em;
       margin-top: -18px;
@@ -132,6 +145,7 @@
   </div>
   <div id="status">Tap to record</div>
   <div id="live"></div>
+  <div id="transcript"></div>
 
 <script>
   const recBtn = document.getElementById("rec");
@@ -139,12 +153,14 @@
   const statusEl = document.getElementById("status");
   const timerEl = document.getElementById("timer");
   const liveEl = document.getElementById("live");
+  const transcriptEl = document.getElementById("transcript");
   const canvas = document.getElementById("wave");
   const g = canvas.getContext("2d");
 
   const BAR_COUNT = 48;      // how many bars of history the waveform shows
   const BAR_EVERY_MS = 60;   // a new bar is added this often
   const HEARD_LEVEL = 0.15;  // above this counts as "hearing something"
+  const FINISH_WAIT_MS = 15000; // after "end", how long the server gets to send the last sentence
 
   const levels = new Array(BAR_COUNT).fill(0);
 
@@ -259,9 +275,14 @@
     const source = audioCtx.createMediaStreamSource(stream);
     source.connect(analyser);
 
+    // Ties the live stream and the upload together, so the server types the text only once
+    const streamId = newStreamId();
+
     liveEl.textContent = "";
+    transcriptEl.replaceChildren();
+    transcriptEl.classList.remove("has-text");
     try {
-      await startLiveStream(source);
+      await startLiveStream(source, streamId);
     } catch (e) {
       // The normal record-and-upload path keeps working even if streaming fails
       liveEl.textContent = "live stream unavailable: " + e.message;
@@ -270,7 +291,7 @@
     chunks = [];
     recorder = new MediaRecorder(stream);
     recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
-    recorder.onstop = upload;
+    recorder.onstop = () => upload(streamId);
     recorder.start();
 
     recording = true;
@@ -281,8 +302,15 @@
     rafId = requestAnimationFrame(loop);
   }
 
+  function newStreamId() {
+    if (crypto.randomUUID) return crypto.randomUUID();
+    // older Safari: 16 random bytes as hex
+    return Array.from(crypto.getRandomValues(new Uint8Array(16)),
+      b => b.toString(16).padStart(2, "0")).join("");
+  }
+
   // Sends raw 16 kHz samples to the server while recording, ~10 small messages per second
-  async function startLiveStream(source) {
+  async function startLiveStream(source, streamId) {
     // The worklet runs in the browser's audio thread; it lives in its own file
     await audioCtx.audioWorklet.addModule("/pcm-worklet.js");
     const capture = new AudioWorkletNode(audioCtx, "pcm-capture");
@@ -293,23 +321,62 @@
     mute.gain.value = 0;
     source.connect(capture).connect(mute).connect(audioCtx.destination);
 
-    ws = new WebSocket(`wss://${location.host}/ws/audio`);
-    ws.binaryType = "arraybuffer";
-    ws.onmessage = e => { liveEl.textContent = e.data; };
-    ws.onerror = () => { liveEl.textContent = "live stream error"; };
+    // Each recording writes into its own two spans. A previous recording's socket may still be
+    // finishing; its last sentence then goes to spans that are no longer on the page.
+    const fin = document.createElement("span");
+    const partial = document.createElement("span");
+    partial.className = "partial";
+    transcriptEl.replaceChildren(fin, partial);
+
+    const sock = new WebSocket(`wss://${location.host}/ws/audio?id=${encodeURIComponent(streamId)}`);
+    sock.binaryType = "arraybuffer";
+    sock.onmessage = e => showLive(e.data, fin, partial, sock);
+    sock.onerror = () => { if (sock === ws) liveEl.textContent = "live stream error"; };
+    sock.onclose = () => clearTimeout(sock.finishTimer);
+    ws = sock;
 
     // Each message from the worklet is 0.1 s of audio, ready to send as-is.
     // Anything captured before the socket finishes opening is simply skipped.
     capture.port.onmessage = e => {
-      if (ws.readyState === WebSocket.OPEN) ws.send(e.data);
+      if (recording && sock.readyState === WebSocket.OPEN) sock.send(e.data);
     };
+  }
+
+  // The server sends {"final": text}, {"partial": text} and {"done": true}
+  function showLive(data, fin, partial, sock) {
+    let msg;
+    try {
+      msg = JSON.parse(data);
+    } catch {
+      return;
+    }
+    if (msg.final !== undefined) {
+      fin.textContent += (fin.textContent ? " " : "") + msg.final;
+    } else if (msg.partial !== undefined) {
+      partial.textContent = msg.partial && fin.textContent ? " " + msg.partial : msg.partial;
+    } else if (msg.done) {
+      sock.close();
+    }
+    if (sock !== ws) return; // an older recording, no longer on the page
+    transcriptEl.classList.toggle("has-text", fin.textContent + partial.textContent !== "");
+    transcriptEl.scrollTop = transcriptEl.scrollHeight; // keep the newest words in view
+  }
+
+  // Asks the server to transcribe the last sentence and send it before the socket closes
+  function finishLiveStream(sock) {
+    if (sock.readyState === WebSocket.OPEN) {
+      sock.send("end");
+      sock.finishTimer = setTimeout(() => sock.close(), FINISH_WAIT_MS);
+    } else {
+      sock.close(); // never opened: nothing to finish
+    }
   }
 
   function stop() {
     recording = false;
     recorder.stop(); // triggers upload() once the recorder has finished the file
     cancelAnimationFrame(rafId);
-    if (ws) ws.close(); // tells the server the live stream is finished
+    if (ws) finishLiveStream(ws);
     audioCtx.close();
 
     document.body.classList.remove("recording");
@@ -319,7 +386,7 @@
     draw();
   }
 
-  async function upload() {
+  async function upload(streamId) {
     stream.getTracks().forEach(t => t.stop()); // turns off the mic (and the orange dot on iPhone)
 
     const audio = new Blob(chunks, { type: recorder.mimeType });
@@ -329,7 +396,10 @@
     try {
       const res = await fetch("/upload", {
         method: "POST",
-        headers: { "Content-Type": audio.type || "application/octet-stream" },
+        headers: {
+          "Content-Type": audio.type || "application/octet-stream",
+          "X-Stream-Id": streamId
+        },
         body: audio
       });
       statusEl.textContent = res.ok ? "Sent ✓  Tap to record again" : `Upload failed (${res.status})`;

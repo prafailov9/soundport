@@ -5,6 +5,7 @@ import com.ntros.data.ServerSettings;
 import com.ntros.data.UploadJob;
 import com.ntros.fileprocessor.AudioFileProcessor;
 import com.ntros.fileprocessor.FileProcessor;
+import com.ntros.live.LiveTranscriptionService;
 import com.ntros.server.JavalinWebServer;
 import com.ntros.output.TextOut;
 import com.ntros.output.WinScreenWriter;
@@ -12,6 +13,7 @@ import com.ntros.transcription.WhisperServerProcess;
 import com.ntros.transcription.WhisperServerTranscriber;
 import com.ntros.transcription.TranscriptionWorker;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 
@@ -20,6 +22,7 @@ public class RuntimeController implements LifeCycle {
   private final TranscriptionWorker transcriptionWorker;
   private final WhisperServerProcess process;
   private final WinScreenWriter winScreenWriter;
+  private final LiveTranscriptionService liveService;
   private final JavalinWebServer javalinWebServer;
 
   public RuntimeController(ServerSettings serverSettings, FileStorageSettings fileStorageSettings) {
@@ -45,12 +48,19 @@ public class RuntimeController implements LifeCycle {
             Path.of("whisper-server.log"));
 
     var transcriber = new WhisperServerTranscriber(process.inferenceUri());
-    transcriptionWorker = new TranscriptionWorker(uploadQueue, textQueue, transcriber);
+    liveService =
+        new LiveTranscriptionService(transcriber::transcribePcm, textQueue, fileStorageSettings);
+    // the upload is posted right as the stream ends; give live time to finish its last sentence
+    transcriptionWorker =
+        new TranscriptionWorker(
+            uploadQueue,
+            textQueue,
+            transcriber,
+            streamId -> liveService.coveredByLive(streamId, Duration.ofSeconds(15)));
 
     javalinWebServer =
         new JavalinWebServer(
             serverSettings,
-            fileStorageSettings,
             (req) -> {
               var res = fileProcessor.write(req);
               if (!res.isSuccess()) {
@@ -59,7 +69,8 @@ public class RuntimeController implements LifeCycle {
               }
               // try dispatch
               return uploadQueue.offer(new UploadJob(res.getCreatedFile(), req.streamId()));
-            });
+            },
+            liveService);
   }
 
   /**
@@ -70,6 +81,7 @@ public class RuntimeController implements LifeCycle {
   public void start() {
     process.start();
     winScreenWriter.start();
+    liveService.start();
     transcriptionWorker.start();
     javalinWebServer.start();
   }
@@ -83,6 +95,7 @@ public class RuntimeController implements LifeCycle {
   public void stop() throws InterruptedException {
     javalinWebServer.stop();
     transcriptionWorker.stop();
+    liveService.stop();
     winScreenWriter.stop();
     process.stop();
   }
