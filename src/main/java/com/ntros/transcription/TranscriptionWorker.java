@@ -43,6 +43,9 @@ public class TranscriptionWorker implements Runnable, LifeCycle {
 
         // TODO: maybe submit to Virtual Threads
         String plaintext = transcriber.transcribe(f);
+        // TODO: add command interpretation. If the plaintext contains a password(e.g. a specific
+        // sentence), watch for command words after it: cleanup current recordings, write the
+        // following text in files, etc.
         log.info("Transcribed:\n{}", plaintext);
         if (!textQueue.offer(plaintext)) {
           log.warn("Count not submit transcribed text to ScreenWriter");

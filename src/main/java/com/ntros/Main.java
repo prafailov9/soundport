@@ -2,8 +2,6 @@ package com.ntros;
 
 import com.ntros.data.FileStorageSettings;
 import com.ntros.data.ServerSettings;
-import com.sun.jna.Native;
-import com.sun.jna.platform.win32.User32;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -38,7 +36,6 @@ public class Main {
     attachShutdownHook(controller);
     controller.start();
     log.info("Accepting requests...");
-
   }
 
   private static void attachShutdownHook(RuntimeController controller) {
@@ -50,12 +47,13 @@ public class Main {
                     controller.stop();
                     //                    cleanup();
                   } catch (InterruptedException e) {
-                    log.info("Error during server shutdown", e);
+                    log.info("Error during runtime shutdown", e);
                   }
                 },
                 "shutdown-1"));
   }
 
+  // TODO: add as a voice command, once feature dev is started
   private static void cleanup() {
     log.info("Deleting recordings...");
     try (Stream<Path> walk = Files.walk(BASE_DIR)) {
