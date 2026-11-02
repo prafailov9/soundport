@@ -129,11 +129,13 @@ public final class WebServer implements LifeCycle {
                 log.info(err);
                 return;
               }
+              String streamId = exchange.getRequestHeaders().getFirst("X-Stream-Id");
               int code;
               try (var in = exchange.getRequestBody()) {
                 code =
                     getStatusCode(
-                        uploadCallback.writeAndDispatch(new UploadRequest(in, contentType)));
+                        uploadCallback.writeAndDispatch(
+                            new UploadRequest(in, contentType, streamId)));
               }
               exchange.sendResponseHeaders(code, -1); // 204 = success, nothing to send back
               exchange.close();

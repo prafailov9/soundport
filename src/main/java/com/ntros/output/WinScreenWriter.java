@@ -30,15 +30,16 @@ public class WinScreenWriter implements Runnable, LifeCycle {
   private static final String INPUT_TYPE_KEYBOARD = "ki";
   private final User32 user32 = User32.INSTANCE;
 
-  private final BlockingQueue<String> textQueue;
+  private final BlockingQueue<TextOut> textQueue;
   private final Thread screenThread;
   private final AtomicBoolean running = new AtomicBoolean(true);
+  // todo: change to set
   private static final List<String> PROGRAM_ALLOWLIST =
       List.of("windowsterminal.exe", "claude.exe", "notepad++.exe", "notepad.exe", "obsidian.exe");
   // Enter runs a command or sends a message here, so line breaks are typed as spaces
   private static final Set<String> ENTER_SENDS = Set.of("windowsterminal.exe", "claude.exe");
 
-  public WinScreenWriter(BlockingQueue<String> textQueue) {
+  public WinScreenWriter(BlockingQueue<TextOut> textQueue) {
     this.textQueue = textQueue;
 
     screenThread = new Thread(this, "scr-1");
@@ -60,43 +61,42 @@ public class WinScreenWriter implements Runnable, LifeCycle {
   public void run() {
     log.info("ScreenWriter started");
     while (running.get()) {
-      String text;
+      TextOut out;
       try {
-        text = textQueue.take();
+        out = textQueue.take();
       } catch (InterruptedException e) {
         Thread.currentThread().interrupt();
         log.error("Interrupted while reading");
         break;
       }
-      if (text.isBlank()) {
+      if (out.text().isBlank()) {
         continue;
       }
-      // spin for roughly 5 seconds
-      tryWriteIn(System.nanoTime() + (WRITE_DELAY_MS * 1_000_000L), text);
+      // spin for roughly 5 seconds, or just look once
+      long waitNanos = out.waitForWindow() ? WRITE_DELAY_MS * 1_000_000L : 0;
+      tryWriteIn(System.nanoTime() + waitNanos, out);
     }
   }
 
   /**
-   * Polls the WinOS for an allowed window to write in. If none found in the duration -> Ctrl + C
+   * Polls the WinOS for an allowed window to write in. Checks at least once. If none found in the
+   * duration -> Ctrl + C
    *
    * @param untilNanos - time given to find a window to write in
-   * @param text - text to copy or write
+   * @param out - text to write, and the text to copy instead
    */
-  private void tryWriteIn(long untilNanos, String text) {
-    while (System.nanoTime() < untilNanos) {
+  private void tryWriteIn(long untilNanos, TextOut out) {
+    do {
       var program = programOf(user32.GetForegroundWindow());
       if (program.isPresent() && PROGRAM_ALLOWLIST.contains(program.get())) {
-        if (write(text, ENTER_SENDS.contains(program.get()))) {
+        if (write(out.text(), ENTER_SENDS.contains(program.get()))) {
           return;
         }
         break; // Windows blocked the typing; fall back to the clipboard
       }
       // short delay to allow cpu to breathe
-      if (!delay(100)) {
-        break;
-      }
-    }
-    copyToClipboard(text);
+    } while (System.nanoTime() < untilNanos && delay(100));
+    copyToClipboard(out.clipboardText());
   }
 
   /**

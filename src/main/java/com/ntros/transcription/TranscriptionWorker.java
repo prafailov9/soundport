@@ -1,6 +1,8 @@
 package com.ntros.transcription;
 
 import com.ntros.LifeCycle;
+import com.ntros.data.UploadJob;
+import com.ntros.output.TextOut;
 import java.nio.file.Path;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -10,16 +12,18 @@ import org.slf4j.LoggerFactory;
 public class TranscriptionWorker implements Runnable, LifeCycle {
   private static final Logger log = LoggerFactory.getLogger(TranscriptionWorker.class);
 
-  private final BlockingQueue<Path> fileQueue;
-  private final BlockingQueue<String> textQueue;
+  private final BlockingQueue<UploadJob> uploadQueue;
+  private final BlockingQueue<TextOut> textQueue;
   private final Thread workerThread;
   private final AtomicBoolean running = new AtomicBoolean(true);
   private final Transcriber att;
   private final Transcriber transcriber;
 
   public TranscriptionWorker(
-      BlockingQueue<Path> fileQueue, BlockingQueue<String> textQueue, Transcriber transcriber) {
-    this.fileQueue = fileQueue;
+      BlockingQueue<UploadJob> uploadQueue,
+      BlockingQueue<TextOut> textQueue,
+      Transcriber transcriber) {
+    this.uploadQueue = uploadQueue;
     // TODO: move these strings to settings or a config file
     att =
         new AudioToTextTranscriber(
@@ -36,16 +40,17 @@ public class TranscriptionWorker implements Runnable, LifeCycle {
   public void run() {
     while (running.get()) {
       try {
-        Path f = fileQueue.take();
+        UploadJob job = uploadQueue.take();
         // TODO: Add fallback to att
 
         // TODO: maybe submit to Virtual Threads
-        String plaintext = transcriber.transcribe(f);
+        String plaintext = transcriber.transcribe(job.file());
         // TODO: add command interpretation. If the plaintext contains a password(e.g. a specific
         // sentence), watch for command words after it: cleanup current recordings, write the
         // following text in files, etc.
         log.info("Transcribed:\n{}", plaintext);
-        textQueue.offer(plaintext); // the queue has no size limit, so this never refuses
+        // the queue has no size limit, so this never refuses
+        textQueue.offer(TextOut.upload(plaintext));
       } catch (InterruptedException e) {
         break;
       } catch (RuntimeException e) {

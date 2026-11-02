@@ -2,9 +2,11 @@ package com.ntros;
 
 import com.ntros.data.FileStorageSettings;
 import com.ntros.data.ServerSettings;
+import com.ntros.data.UploadJob;
 import com.ntros.fileprocessor.AudioFileProcessor;
 import com.ntros.fileprocessor.FileProcessor;
 import com.ntros.server.JavalinWebServer;
+import com.ntros.output.TextOut;
 import com.ntros.output.WinScreenWriter;
 import com.ntros.transcription.WhisperServerProcess;
 import com.ntros.transcription.WhisperServerTranscriber;
@@ -30,9 +32,9 @@ public class RuntimeController implements LifeCycle {
 
     FileProcessor fileProcessor = new AudioFileProcessor(fileStorageSettings);
     // audio2text queue
-    BlockingQueue<Path> fileQueue = new LinkedBlockingQueue<>();
+    BlockingQueue<UploadJob> uploadQueue = new LinkedBlockingQueue<>();
     // text2screen queue
-    BlockingQueue<String> textQueue = new LinkedBlockingQueue<>();
+    BlockingQueue<TextOut> textQueue = new LinkedBlockingQueue<>();
     winScreenWriter = new WinScreenWriter(textQueue);
 
     process =
@@ -43,7 +45,7 @@ public class RuntimeController implements LifeCycle {
             Path.of("whisper-server.log"));
 
     var transcriber = new WhisperServerTranscriber(process.inferenceUri());
-    transcriptionWorker = new TranscriptionWorker(fileQueue, textQueue, transcriber);
+    transcriptionWorker = new TranscriptionWorker(uploadQueue, textQueue, transcriber);
 
     javalinWebServer =
         new JavalinWebServer(
@@ -56,7 +58,7 @@ public class RuntimeController implements LifeCycle {
                 return false;
               }
               // try dispatch
-              return fileQueue.offer(res.getCreatedFile());
+              return uploadQueue.offer(new UploadJob(res.getCreatedFile(), req.streamId()));
             });
   }
 

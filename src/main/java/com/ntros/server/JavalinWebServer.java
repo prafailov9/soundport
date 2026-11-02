@@ -133,8 +133,10 @@ public final class JavalinWebServer implements LifeCycle {
       ctx.status(400).result("Missing Content-Type header");
       return;
     }
+    // ties this upload to the live stream the page recorded alongside it
+    String streamId = ctx.header("X-Stream-Id");
     try (InputStream in = ctx.bodyInputStream()) {
-      boolean ok = uploadCallback.writeAndDispatch(new UploadRequest(in, contentType));
+      boolean ok = uploadCallback.writeAndDispatch(new UploadRequest(in, contentType, streamId));
       ctx.status(ok ? 204 : 500);
     }
   }
