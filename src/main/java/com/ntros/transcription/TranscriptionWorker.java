@@ -1,8 +1,6 @@
 package com.ntros.transcription;
 
 import com.ntros.LifeCycle;
-import java.awt.Toolkit;
-import java.awt.datatransfer.StringSelection;
 import java.nio.file.Path;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -14,7 +12,7 @@ public class TranscriptionWorker implements Runnable, LifeCycle {
 
   private final BlockingQueue<Path> fileQueue;
   private final BlockingQueue<String> textQueue;
-  private final Thread dispatchThread;
+  private final Thread workerThread;
   private final AtomicBoolean running = new AtomicBoolean(true);
   private final Transcriber att;
   private final Transcriber transcriber;
@@ -31,7 +29,7 @@ public class TranscriptionWorker implements Runnable, LifeCycle {
 
     this.transcriber = transcriber;
     this.textQueue = textQueue;
-    dispatchThread = new Thread(this, "dispatch-1");
+    workerThread = new Thread(this, "upload-1");
   }
 
   @Override
@@ -47,9 +45,7 @@ public class TranscriptionWorker implements Runnable, LifeCycle {
         // sentence), watch for command words after it: cleanup current recordings, write the
         // following text in files, etc.
         log.info("Transcribed:\n{}", plaintext);
-        if (!textQueue.offer(plaintext)) {
-          log.warn("Count not submit transcribed text to ScreenWriter");
-        }
+        textQueue.offer(plaintext); // the queue has no size limit, so this never refuses
       } catch (InterruptedException e) {
         break;
       } catch (RuntimeException e) {
@@ -60,13 +56,13 @@ public class TranscriptionWorker implements Runnable, LifeCycle {
 
   @Override
   public void start() {
-    dispatchThread.start();
+    workerThread.start();
   }
 
   @Override
   public void stop() throws InterruptedException {
     running.set(false);
-    dispatchThread.interrupt(); // wakes take() so the loop can exit
-    dispatchThread.join();
+    workerThread.interrupt(); // wakes take() so the loop can exit
+    workerThread.join();
   }
 }

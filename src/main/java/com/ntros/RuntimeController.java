@@ -5,7 +5,7 @@ import com.ntros.data.ServerSettings;
 import com.ntros.fileprocessor.AudioFileProcessor;
 import com.ntros.fileprocessor.FileProcessor;
 import com.ntros.server.JavalinWebServer;
-import com.ntros.transcription.WinScreenWriter;
+import com.ntros.output.WinScreenWriter;
 import com.ntros.transcription.WhisperServerProcess;
 import com.ntros.transcription.WhisperServerTranscriber;
 import com.ntros.transcription.TranscriptionWorker;
@@ -60,13 +60,16 @@ public class RuntimeController implements LifeCycle {
             });
   }
 
-  /** process runs the model. It needs to start first. Then the middleware. Last is the server */
+  /**
+   * process runs the model. It needs to start first. Then the middleware, each consumer before
+   * whatever feeds it, so nothing lands on a queue nobody reads. Last is the server
+   */
   @Override
   public void start() {
     process.start();
+    winScreenWriter.start();
     transcriptionWorker.start();
     javalinWebServer.start();
-    winScreenWriter.start();
   }
 
   /**
@@ -76,9 +79,9 @@ public class RuntimeController implements LifeCycle {
    */
   @Override
   public void stop() throws InterruptedException {
-    winScreenWriter.stop();
     javalinWebServer.stop();
     transcriptionWorker.stop();
+    winScreenWriter.stop();
     process.stop();
   }
 }

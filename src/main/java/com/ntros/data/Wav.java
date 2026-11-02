@@ -27,6 +27,14 @@ public final class Wav {
     }
   }
 
+  /** Header + samples in one array, ready to send as a .wav file without touching the disk. */
+  public static byte[] toWav(byte[] pcm) {
+    byte[] wav = new byte[44 + pcm.length];
+    System.arraycopy(header(pcm.length), 0, wav, 0, 44);
+    System.arraycopy(pcm, 0, wav, 44, pcm.length);
+    return wav;
+  }
+
   public static byte[] header(int pcmLength) {
     ByteBuffer h =
         ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN); // WAV numbers are little-endian

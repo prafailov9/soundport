@@ -1,4 +1,4 @@
-package com.ntros.transcription;
+package com.ntros.output;
 
 import com.ntros.LifeCycle;
 import com.sun.jna.platform.win32.User32;
@@ -13,6 +13,7 @@ import java.awt.datatransfer.StringSelection;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
@@ -25,6 +26,7 @@ public class WinScreenWriter implements Runnable, LifeCycle {
   private static final int WRITE_DELAY_MS = 5_000;
   private static final int KEYEVENTF_KEYUP = 0x0002;
   private static final int KEYEVENTF_UNICODE = 0x0004;
+  private static final int VK_RETURN = 0x0D;
   private static final String INPUT_TYPE_KEYBOARD = "ki";
   private final User32 user32 = User32.INSTANCE;
 
@@ -33,6 +35,8 @@ public class WinScreenWriter implements Runnable, LifeCycle {
   private final AtomicBoolean running = new AtomicBoolean(true);
   private static final List<String> PROGRAM_ALLOWLIST =
       List.of("windowsterminal.exe", "claude.exe", "notepad++.exe", "notepad.exe", "obsidian.exe");
+  // Enter runs a command or sends a message here, so line breaks are typed as spaces
+  private static final Set<String> ENTER_SENDS = Set.of("windowsterminal.exe", "claude.exe");
 
   public WinScreenWriter(BlockingQueue<String> textQueue) {
     this.textQueue = textQueue;
@@ -82,8 +86,10 @@ public class WinScreenWriter implements Runnable, LifeCycle {
     while (System.nanoTime() < untilNanos) {
       var program = programOf(user32.GetForegroundWindow());
       if (program.isPresent() && PROGRAM_ALLOWLIST.contains(program.get())) {
-        write(text);
-        return;
+        if (write(text, ENTER_SENDS.contains(program.get()))) {
+          return;
+        }
+        break; // Windows blocked the typing; fall back to the clipboard
       }
       // short delay to allow cpu to breathe
       if (!delay(100)) {
@@ -95,24 +101,47 @@ public class WinScreenWriter implements Runnable, LifeCycle {
 
   /**
    * Writes the text directly in a foreground window's textbox right after already-existing text,
-   * without a whitespace. Simulates keyboard input
+   * without a whitespace. Simulates keyboard input. Line breaks are pressed as Enter, or typed as
+   * spaces where Enter would run or send what was typed so far.
    *
    * @param text send to windows for writing
+   * @param newlineAsSpace true for programs where Enter runs a command or sends a message
+   * @return false if Windows did not accept every key event, e.g. the window runs as administrator
    */
-  private void write(String text) {
-    WinUser.INPUT[] inputs = (WinUser.INPUT[]) new WinUser.INPUT().toArray(text.length() * 2);
+  private boolean write(String text, boolean newlineAsSpace) {
+    String typed = text.replace("\r", "");
+    if (newlineAsSpace) {
+      typed = typed.replace('\n', ' ');
+    }
+    if (typed.isEmpty()) {
+      return true;
+    }
+    WinUser.INPUT[] inputs = (WinUser.INPUT[]) new WinUser.INPUT().toArray(typed.length() * 2);
     int i = 0;
-    for (char c : text.toCharArray()) {
+    for (char c : typed.toCharArray()) {
       for (boolean up : new boolean[] {false, true}) {
         WinUser.INPUT in = inputs[i++];
         in.type = new DWORD(INPUT.INPUT_KEYBOARD);
         in.input.setType(INPUT_TYPE_KEYBOARD);
-        in.input.ki.wVk = new WORD(0);
-        in.input.ki.wScan = new WORD(c);
-        in.input.ki.dwFlags = new DWORD(KEYEVENTF_UNICODE | (up ? KEYEVENTF_KEYUP : 0));
+        int upFlag = up ? KEYEVENTF_KEYUP : 0;
+        if (c == '\n') {
+          // a real Enter key; a unicode 0x0A behaves differently from one program to the next
+          in.input.ki.wVk = new WORD(VK_RETURN);
+          in.input.ki.wScan = new WORD(0);
+          in.input.ki.dwFlags = new DWORD(upFlag);
+        } else {
+          in.input.ki.wVk = new WORD(0);
+          in.input.ki.wScan = new WORD(c);
+          in.input.ki.dwFlags = new DWORD(KEYEVENTF_UNICODE | upFlag);
+        }
       }
     }
-    user32.SendInput(new DWORD(inputs.length), inputs, inputs[0].size());
+    int sent = user32.SendInput(new DWORD(inputs.length), inputs, inputs[0].size()).intValue();
+    if (sent != inputs.length) {
+      log.warn("Windows accepted {} of {} key events", sent, inputs.length);
+      return false;
+    }
+    return true;
   }
 
   private Optional<String> programOf(HWND hwnd) {
