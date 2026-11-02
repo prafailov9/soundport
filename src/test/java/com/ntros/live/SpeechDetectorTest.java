@@ -4,40 +4,18 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import com.ntros.data.Wav;
-import java.io.ByteArrayOutputStream;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
+import static com.ntros.live.TestAudio.concat;
+import static com.ntros.live.TestAudio.silence;
+import static com.ntros.live.TestAudio.speech;
+import static com.ntros.live.TestAudio.tone;
+
 import java.util.OptionalInt;
 import org.junit.jupiter.api.Test;
 
 class SpeechDetectorTest {
 
-  // a 440 Hz tone at half volume stands in for speech: about -9 dBFS
-  private static byte[] tone(double seconds, double amplitude) {
-    int samples = (int) Math.round(seconds * Wav.SAMPLE_RATE);
-    ByteBuffer buf = ByteBuffer.allocate(samples * 2).order(ByteOrder.LITTLE_ENDIAN);
-    for (int i = 0; i < samples; i++) {
-      double s = amplitude * Math.sin(2 * Math.PI * 440 * i / Wav.SAMPLE_RATE);
-      buf.putShort((short) Math.round(s * 32767));
-    }
-    return buf.array();
-  }
-
-  private static byte[] speech(double seconds) {
-    return tone(seconds, 0.5);
-  }
-
-  private static byte[] silence(double seconds) {
-    return new byte[(int) Math.round(seconds * Wav.SAMPLE_RATE) * 2];
-  }
-
   private static double[] levels(byte[]... parts) {
-    var out = new ByteArrayOutputStream();
-    for (byte[] p : parts) {
-      out.writeBytes(p);
-    }
-    return SpeechDetector.frameLevels(out.toByteArray());
+    return SpeechDetector.frameLevels(concat(parts));
   }
 
   @Test
