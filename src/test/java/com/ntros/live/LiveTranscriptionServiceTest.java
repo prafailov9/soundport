@@ -114,10 +114,10 @@ class LiveTranscriptionServiceTest {
 
   @Test
   void pauseConfirmsTheTextBeforeIt() {
-    stream(speech(1), silence(1));
+    stream(speech(2), silence(1));
     service.tick();
 
-    assertEquals(List.of(bytes(1.3)), transcriber.calls); // cut 300 ms into the pause
+    assertEquals(List.of(bytes(2.3)), transcriber.calls); // cut 300 ms into the pause
     assertEquals(List.of("{\"final\":\"seg1\"}"), client.messages);
     assertEquals(new TextOut("seg1", "seg1", false), textQueue.poll());
 
@@ -144,13 +144,39 @@ class LiveTranscriptionServiceTest {
 
   @Test
   void laterSegmentsGetASpaceAndTheClipboardGetsTheWholeSession() {
-    stream(speech(1), silence(1));
+    stream(speech(2), silence(1));
     service.tick();
-    stream(speech(1), silence(1));
+    stream(speech(2), silence(1));
     service.tick();
 
     assertEquals(new TextOut("seg1", "seg1", false), textQueue.poll());
     assertEquals(new TextOut(" seg2", "seg1 seg2", false), textQueue.poll());
+  }
+
+  @Test
+  void loneWordWaitsForTheRestOfItsSentence() {
+    stream(speech(0.5), silence(1));
+    service.tick();
+
+    assertEquals(List.of("{\"partial\":\"seg1\"}"), client.messages); // tentative only
+    assertTrue(textQueue.isEmpty());
+
+    stream(speech(2), silence(1));
+    service.tick();
+
+    // the word, 0.5 s of its pause, then the sentence: confirmed together
+    assertEquals(bytes(0.5 + 0.5 + 0.5 + 2 + 0.3), transcriber.calls.get(1));
+    assertEquals(new TextOut("seg2", "seg2", false), textQueue.poll());
+  }
+
+  @Test
+  void longQuietBeforeSpeechIsNotSentToWhisper() {
+    stream(silence(0.4), speech(0.4), silence(3), speech(2)); // a word, a long gap, a sentence
+    service.end(client);
+
+    assertTrue(service.coveredByLive(ID, WAIT));
+    // the first word with 0.4 s before it, 0.5 s on each side of the 3 s gap, then the speech
+    assertEquals(List.of(bytes(0.4 + 0.4 + 0.5 + 0.5 + 2)), transcriber.calls);
   }
 
   @Test

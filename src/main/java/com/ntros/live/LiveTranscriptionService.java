@@ -33,11 +33,14 @@ import org.slf4j.LoggerFactory;
  * for each open stream, decides what to send to Whisper, what to confirm and what to send back:
  *
  * <ul>
- *   <li>nothing said: skip it, Whisper invents text on silence
- *   <li>a pause: confirm everything before it, it won't change any more
+ *   <li>nothing said, judged against the room's noise: skip it, Whisper invents text on silence
+ *   <li>a pause after 1.5 s of speech or more: confirm everything before it, it won't change any
+ *       more
  *   <li>20 s without a pause: cut at the quietest point of the last 5 s, then the same
  *   <li>the rest is tentative: shown grey on the page, never typed
  * </ul>
+ *
+ * <p>Whisper gets only the speech in what it's sent, with long quiet stretches squeezed out.
  *
  * <p>One thread for all streams, because whisper-server works on one request at a time anyway.
  */
@@ -162,18 +165,19 @@ public final class LiveTranscriptionService implements LifeCycle {
       return;
     }
     s.lastTickEnd = end;
+    double speech = listen(s, end);
 
     byte[] window = s.copy(s.windowStart, end);
     double[] levels = SpeechDetector.frameLevels(window);
-    logLevels(s, levels);
+    logLevels(s, levels, speech);
 
-    if (!SpeechDetector.hasSpeech(levels)) {
+    if (!SpeechDetector.hasSpeech(levels, speech)) {
       s.windowStart = Math.max(s.windowStart, alignToSample(end - KEEP_ON_SILENCE));
       sendPartial(s, "");
       return;
     }
 
-    OptionalInt cut = SpeechDetector.lastPauseCut(levels);
+    OptionalInt cut = SpeechDetector.lastPauseCut(levels, speech);
     if (cut.isEmpty() && window.length > MAX_WINDOW_BYTES) {
       cut =
           OptionalInt.of(
@@ -182,15 +186,32 @@ public final class LiveTranscriptionService implements LifeCycle {
     if (cut.isPresent()) {
       int cutBytes = cut.getAsInt() * SpeechDetector.FRAME_BYTES;
       byte[] head = Arrays.copyOf(window, cutBytes);
-      if (SpeechDetector.hasSpeech(SpeechDetector.frameLevels(head))) {
-        confirm(s, transcriber.transcribe(head));
+      if (SpeechDetector.hasSpeech(SpeechDetector.frameLevels(head), speech)) {
+        confirm(s, transcribe(head, speech));
       }
       s.windowStart += cutBytes;
       window = Arrays.copyOfRange(window, cutBytes, window.length);
     }
 
-    boolean tailHasSpeech = SpeechDetector.hasSpeech(SpeechDetector.frameLevels(window));
-    sendPartial(s, tailHasSpeech ? transcriber.transcribe(window).strip() : "");
+    boolean tailHasSpeech = SpeechDetector.hasSpeech(SpeechDetector.frameLevels(window), speech);
+    sendPartial(s, tailHasSpeech ? transcribe(window, speech).strip() : "");
+  }
+
+  /** Lets the noise floor hear the new audio, and returns how loud speech must be now. */
+  private static double listen(LiveSession s, int end) {
+    int frames = (end - s.measured) / SpeechDetector.FRAME_BYTES;
+    if (frames > 0) {
+      int to = s.measured + frames * SpeechDetector.FRAME_BYTES;
+      s.noise.add(SpeechDetector.frameLevels(s.copy(s.measured, to)));
+      s.measured = to;
+    }
+    return s.noise.speechThreshold();
+  }
+
+  /** Whisper only gets the speech: long quiet stretches are where it invents text. */
+  private String transcribe(byte[] pcm, double speech) {
+    return transcriber.transcribe(
+        SpeechDetector.squeeze(pcm, SpeechDetector.frameLevels(pcm), speech));
   }
 
   private void finishLater(LiveClient client, boolean clientWaiting) {
@@ -209,9 +230,11 @@ public final class LiveTranscriptionService implements LifeCycle {
   private void finish(LiveSession s, boolean clientWaiting) {
     s.clientGone = !clientWaiting;
     try {
-      byte[] rest = s.copy(s.windowStart, s.size());
-      if (SpeechDetector.hasSpeech(SpeechDetector.frameLevels(rest))) {
-        confirm(s, transcriber.transcribe(rest));
+      int end = s.size();
+      double speech = listen(s, end);
+      byte[] rest = s.copy(s.windowStart, end);
+      if (SpeechDetector.hasSpeech(SpeechDetector.frameLevels(rest), speech)) {
+        confirm(s, transcribe(rest, speech));
       }
     } catch (RuntimeException e) {
       log.error("Transcribing the end of live stream {} failed", s.streamId, e);
@@ -276,18 +299,19 @@ public final class LiveTranscriptionService implements LifeCycle {
     }
   }
 
-  private static void logLevels(LiveSession s, double[] levels) {
+  private static void logLevels(LiveSession s, double[] levels, double speech) {
     if (!log.isDebugEnabled() || levels.length == 0) {
       return;
     }
     double loudest = Arrays.stream(levels).max().orElseThrow();
     double quietest = Arrays.stream(levels).min().orElseThrow();
     log.debug(
-        "{}: window {} s, loudest {} dBFS, quietest {} dBFS",
+        "{}: window {} s, loudest {} dBFS, quietest {} dBFS, speech above {} dBFS",
         s.streamId,
         String.format("%.1f", levels.length / 10.0),
         String.format("%.0f", loudest),
-        String.format("%.0f", quietest));
+        String.format("%.0f", quietest),
+        String.format("%.0f", speech));
   }
 
   private static int alignToSample(int offset) {

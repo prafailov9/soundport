@@ -23,6 +23,8 @@ final class LiveSession {
   // only touched on the live-1 thread
   int windowStart; // byte offset where the not-yet-confirmed audio begins
   int lastTickEnd; // size at the last transcription, to skip when little is new
+  int measured; // byte offset up to which the noise floor has heard the stream
+  final NoiseFloor noise = new NoiseFloor();
   final StringBuilder confirmed = new StringBuilder();
   String lastPartial = "";
   boolean clientGone; // the socket dropped: keep transcribing, stop sending
