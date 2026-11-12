@@ -14,11 +14,13 @@ target/
 *.iml
 *.ipr
 LIVESTREAMING_PLAN.md
+TRANSCRIPT_JOBS_PLAN.md
 
 ### Customs ###
 handoffnotes.txt
 test.wav
 recordings/**
+transcripts/**
 dev-keystore.p12
 whisper-server.log
 
