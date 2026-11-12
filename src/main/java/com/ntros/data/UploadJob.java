@@ -7,4 +7,4 @@ import java.nio.file.Path;
  *
  * @param streamId the live stream recorded alongside it, or null if there was none
  */
-public record UploadJob(Path file, String streamId) {}
+public record UploadJob(Path file,String jobId ,String streamId, Command command) {}

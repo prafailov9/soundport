@@ -78,6 +78,7 @@ class LiveTranscriptionServiceTest {
             tmp.resolve("tmp"),
             tmp.resolve("ready"),
             tmp.resolve("live"),
+            tmp.resolve("trs"),
             DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss-SSS"));
     // not started: the tests call tick() themselves instead of waiting for the timer
     service = new LiveTranscriptionService(transcriber, textQueue, files);

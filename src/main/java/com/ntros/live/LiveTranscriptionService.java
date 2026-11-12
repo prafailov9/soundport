@@ -5,6 +5,7 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 
 import com.ntros.LifeCycle;
 import com.ntros.data.FileStorageSettings;
+import com.ntros.data.Json;
 import com.ntros.data.Wav;
 import com.ntros.output.TextOut;
 import java.io.IOException;
@@ -257,7 +258,7 @@ public final class LiveTranscriptionService implements LifeCycle {
     String typed = s.confirmed.isEmpty() ? clean : " " + clean;
     s.confirmed.append(typed);
     log.info("Live: {}", clean);
-    send(s, Json.object("final", clean));
+    send(s, Json.parseRow("final", clean));
     textQueue.offer(TextOut.liveSegment(typed, s.confirmed.toString()));
   }
 
@@ -266,7 +267,7 @@ public final class LiveTranscriptionService implements LifeCycle {
       return; // don't resend the same thing
     }
     s.lastPartial = text;
-    send(s, Json.object("partial", text));
+    send(s, Json.parseRow("partial", text));
   }
 
   private void send(LiveSession s, String json) {

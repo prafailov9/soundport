@@ -1,14 +1,20 @@
 package com.ntros;
 
+import static com.ntros.data.UploadStatus.FAILED_WRITE;
+import static com.ntros.data.UploadStatus.WRITTEN_DISPATCHED;
+
 import com.ntros.data.FileStorageSettings;
 import com.ntros.data.ServerSettings;
 import com.ntros.data.UploadJob;
+import com.ntros.data.UploadRequest;
+import com.ntros.data.UploadResponse;
 import com.ntros.fileprocessor.AudioFileProcessor;
 import com.ntros.fileprocessor.FileProcessor;
 import com.ntros.live.LiveTranscriptionService;
 import com.ntros.server.JavalinWebServer;
 import com.ntros.output.TextOut;
 import com.ntros.output.WinScreenWriter;
+import com.ntros.transcription.TranscriptionStatusService;
 import com.ntros.transcription.WhisperServerProcess;
 import com.ntros.transcription.WhisperServerTranscriber;
 import com.ntros.transcription.TranscriptionWorker;
@@ -32,7 +38,7 @@ public class RuntimeController implements LifeCycle {
     if (fileStorageSettings == null) {
       throw new IllegalArgumentException("Empty FileStorageSettings Settings");
     }
-
+    TranscriptionStatusService transcriptionStatusService = new TranscriptionStatusService();
     FileProcessor fileProcessor = new AudioFileProcessor(fileStorageSettings);
     // audio2text queue
     BlockingQueue<UploadJob> uploadQueue = new LinkedBlockingQueue<>();
@@ -53,24 +59,19 @@ public class RuntimeController implements LifeCycle {
     // the upload is posted right as the stream ends; give live time to finish its last sentence
     transcriptionWorker =
         new TranscriptionWorker(
+            fileStorageSettings,
             uploadQueue,
             textQueue,
             transcriber,
+            transcriptionStatusService,
             streamId -> liveService.coveredByLive(streamId, Duration.ofSeconds(15)));
 
     javalinWebServer =
         new JavalinWebServer(
             serverSettings,
-            (req) -> {
-              var res = fileProcessor.write(req);
-              if (!res.isSuccess()) {
-                // skip dispatch, return failure
-                return false;
-              }
-              // try dispatch
-              return uploadQueue.offer(new UploadJob(res.getCreatedFile(), req.streamId()));
-            },
-            liveService);
+            liveService,
+            transcriptionStatusService,
+            (req) -> handleDispatch(req, fileProcessor, uploadQueue));
   }
 
   /**
@@ -98,5 +99,19 @@ public class RuntimeController implements LifeCycle {
     liveService.stop();
     winScreenWriter.stop();
     process.stop();
+  }
+
+  private UploadResponse handleDispatch(
+      UploadRequest req, FileProcessor fileProcessor, BlockingQueue<UploadJob> uploadQueue) {
+    var res = fileProcessor.write(req);
+    if (!res.isSuccess()) {
+      return new UploadResponse(false, FAILED_WRITE, res.getCreatedFile());
+    }
+
+    return new UploadResponse(
+        uploadQueue.offer(
+            new UploadJob(res.getCreatedFile(), req.jobId(), req.streamId(), req.command())),
+        WRITTEN_DISPATCHED,
+        res.getCreatedFile());
   }
 }

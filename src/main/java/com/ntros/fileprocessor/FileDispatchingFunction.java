@@ -1,8 +1,9 @@
 package com.ntros.fileprocessor;
 
 import com.ntros.data.UploadRequest;
+import com.ntros.data.UploadResponse;
 
 @FunctionalInterface
 public interface FileDispatchingFunction {
-  boolean writeAndDispatch(UploadRequest uploadRequest);
+  UploadResponse dispatch(UploadRequest uploadRequest);
 }

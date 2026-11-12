@@ -21,6 +21,7 @@ public class Main {
   private static final Path TMP_DIR = Path.of("recordings/tmp");
   private static final Path READY_DIR = Path.of("recordings/ready");
   private static final Path LIVE_DIR = Path.of("recordings/live");
+  private static final Path TRANSCRIPTS_DIR = Path.of("transcripts/ready");
   private static final DateTimeFormatter DATE_TIME_FORMATTER =
       DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss-SSS");
 
@@ -29,7 +30,7 @@ public class Main {
     ServerSettings settings = new ServerSettings(WEB_SERVER_PORT, SERVER_REQUEST_PROCESSOR_THREADS);
 
     var fileSettings =
-        new FileStorageSettings(BASE_DIR, TMP_DIR, READY_DIR, LIVE_DIR, DATE_TIME_FORMATTER);
+        new FileStorageSettings(BASE_DIR, TMP_DIR, READY_DIR, LIVE_DIR, TRANSCRIPTS_DIR, DATE_TIME_FORMATTER);
     log.info("Starting server on port: {}", WEB_SERVER_PORT);
     RuntimeController controller = new RuntimeController(settings, fileSettings);
 

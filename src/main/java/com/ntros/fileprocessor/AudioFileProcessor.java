@@ -72,6 +72,7 @@ public class AudioFileProcessor implements FileProcessor {
       Files.createDirectories(settings.baseDir());
       Files.createDirectories(settings.tmpDir());
       Files.createDirectories(settings.readyDir());
+      Files.createDirectories(settings.trsDir());
     } catch (IOException e) {
       log.error("Failed to create dir", e);
       throw new RuntimeException(e);
